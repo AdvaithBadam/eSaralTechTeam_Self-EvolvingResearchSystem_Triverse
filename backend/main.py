@@ -17,6 +17,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import uuid
+import asyncio
+import logging
+import math
+from db import update_preference_vector, get_evolution_stats, increment_query_count
+
+# ─── Import agent modules (owned by Teammate S) ───
+from agents import search_web
+from scraper import scrape_content, summarize_text
+
+logger = logging.getLogger("insightstream")
 
 # ─── App Setup ───
 
@@ -40,20 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── In-Memory State (will be replaced by ChromaDB) ───
-
-evolution_state = {
-    "total_queries": 0,
-    "total_votes": 0,
-    "evolution_level": 1,
-    "preference_vector": {
-        "academic_papers": 50,
-        "tech_blogs": 50,
-        "stack_overflow": 50,
-        "github_repos": 50,
-        "documentation": 50,
-    },
-}
+# ─── In-Memory State (moved to db.py) ───
 
 # ─── Mock Research Results ───
 
@@ -122,6 +119,7 @@ class SearchResponse(BaseModel):
 class FeedbackRequest(BaseModel):
     result_id: str
     vote: int  # +1 for upvote, -1 for downvote
+    category: str
 
 
 class FeedbackResponse(BaseModel):
@@ -147,67 +145,144 @@ class StatsResponse(BaseModel):
 async def search(request: SearchRequest):
     """
     POST /search
-    Takes a user query and returns research results.
-    Currently returns mock data — Teammate S will wire this to:
-      1. DuckDuckGo/Tavily web search
-      2. BeautifulSoup/trafilatura content scraper
-      3. Gemini AI summarizer
+    Multi-agent search pipeline:
+      1. Searcher agent  → search_web(query) → list of {title, url, source_type}
+      2. Scraper agent   → scrape_content(url) → raw text for each URL
+      3. Synthesizer     → summarize_text(text, query) → summary + credibility
+    Falls back to MOCK_RESULTS if the pipeline fails entirely.
     """
-    evolution_state["total_queries"] += 1
+    # Update Evolution Stats
+    increment_query_count()
+    stats = get_evolution_stats()
 
-    return SearchResponse(
-        query=request.query,
-        results=MOCK_RESULTS,
-        agents_used=["Searcher", "Synthesizer", "Ranker"],
-        evolution_level=evolution_state["evolution_level"],
-    )
+    try:
+        # Step 1: Searcher agent — get URLs from web search
+        raw_results = await search_web(request.query)
+
+        # If search_web returns empty, fall back to mock data
+        if not raw_results:
+            logger.warning("search_web returned empty — using mock data")
+            return SearchResponse(
+                query=request.query,
+                results=MOCK_RESULTS,
+                agents_used=["Searcher (mock fallback)"],
+                evolution_level=evolution_state["evolution_level"],
+            )
+
+        # Step 2: Self-Evolution Ranking
+        # Re-rank raw results using the user's preference vector BEFORE picking the top 3
+        ranked_results = rank_results_by_preference(raw_results, stats["preference_vector"])
+        
+        # Pick top 3 after ranking
+        top_results = ranked_results[:3]
+
+        async def process_single_result(idx: int, item: dict) -> dict:
+            """Scrape and summarize one result. Returns a formatted dict or None on failure."""
+            try:
+                url = item.get("url", "")
+                title = item.get("title", "Untitled")
+                
+                # Apply our heuristic instead of the default 'Web' from agents.py
+                source_type = guess_source_type(url)
+
+                # Scraper agent — extract page content
+                scraped_text = await scrape_content(url)
+
+                # Synthesizer agent — AI summarization
+                if scraped_text:
+                    ai_result = await summarize_text(scraped_text, request.query)
+                    summary = ai_result.get("summary", "No summary available.")
+                    credibility = ai_result.get("credibility", 50)
+                else:
+                    summary = "Could not extract content from this source."
+                    credibility = 30
+
+                return {
+                    "id": f"res_{uuid.uuid4().hex[:8]}",
+                    "title": title,
+                    "source": url,
+                    "source_type": source_type,
+                    "summary": summary,
+                    "credibility": credibility,
+                    "votes": 0,
+                }
+            except Exception as e:
+                logger.error(f"Failed to process result {idx}: {e}")
+                return {
+                    "id": f"res_err_{idx}",
+                    "title": item.get("title", "Error"),
+                    "source": item.get("url", ""),
+                    "source_type": item.get("source_type", "Web"),
+                    "summary": f"Error processing this result: {str(e)}",
+                    "credibility": 0,
+                    "votes": 0,
+                }
+
+        # Run all scrape+summarize tasks concurrently
+        processed = await asyncio.gather(
+            *[process_single_result(i, item) for i, item in enumerate(top_results)]
+        )
+
+        # Filter out None results (shouldn't happen, but defensive)
+        final_results = [r for r in processed if r is not None]
+
+        return SearchResponse(
+            query=request.query,
+            results=final_results,
+            agents_used=["Searcher", "Scraper", "Synthesizer", "Ranker"],
+            evolution_level=stats["evolution_level"],
+        )
+
+    except Exception as e:
+        from fastapi import HTTPException
+        logger.error(f"Search pipeline failed: {e}")
+        # Let the frontend catch this and show the "System: Heavy Load" toast
+        raise HTTPException(status_code=500, detail="Content synthesis failed due to system load.")
 
 
 @app.post("/feedback", response_model=FeedbackResponse)
 async def feedback(request: FeedbackRequest):
     """
     POST /feedback
-    Takes a result ID and a vote (+1 upvote, -1 downvote).
-    Updates the in-memory preference vector based on the result's source type.
-    This is the core RLHF evolution mechanism.
-
-    TODO (Teammate S): Persist to ChromaDB and update the real preference vector.
+    Takes a result ID, a vote (+1 upvote, -1 downvote), and a category.
+    Updates the preference vector via db.py and recalculates Evolution Level.
     """
-    evolution_state["total_votes"] += 1
+    # Save to ChromaDB via teammate S's module and get updated state
+    new_state = update_preference_vector(request.result_id, request.vote, request.category)
 
-    # Find the result to determine its source type
+    # Find the result to update the mock UI count
     result = next((r for r in MOCK_RESULTS if r["id"] == request.result_id), None)
-
     new_vote_count = 0
     if result:
         result["votes"] += request.vote
         new_vote_count = result["votes"]
 
-        # Update preference vector based on source type
-        source_map = {
-            "Academic": "academic_papers",
-            "Tech Blog": "tech_blogs",
-            "Stack Overflow": "stack_overflow",
-            "GitHub": "github_repos",
-            "Documentation": "documentation",
-        }
-        pref_key = source_map.get(result["source_type"])
-        if pref_key:
-            # Nudge the preference: +5 for upvote, -5 for downvote, clamped 0-100
-            current = evolution_state["preference_vector"][pref_key]
-            evolution_state["preference_vector"][pref_key] = max(
-                0, min(100, current + (request.vote * 5))
-            )
-
-    # Evolve: every 5 votes bumps the evolution level
-    evolution_state["evolution_level"] = 1 + (evolution_state["total_votes"] // 5)
-
     return FeedbackResponse(
         status="ok",
         result_id=request.result_id,
         new_vote_count=new_vote_count,
-        evolution_level=evolution_state["evolution_level"],
-        preference_vector=evolution_state["preference_vector"],
+        evolution_level=new_state["evolution_level"],
+        preference_vector=new_state["preference_vector"],
+    )
+
+class EvolutionStatsResponse(BaseModel):
+    evolution_level: int
+    total_votes: int
+    total_queries: int
+    preference_vector: dict
+
+@app.get("/evolution-stats", response_model=EvolutionStatsResponse)
+async def get_evolution_stats_endpoint():
+    """
+    GET /evolution-stats
+    Returns the dynamic Evolution Level L based on total votes, and the current preference vector.
+    """
+    stats = get_evolution_stats()
+    return EvolutionStatsResponse(
+        evolution_level=stats["evolution_level"],
+        total_votes=stats["total_votes"],
+        total_queries=stats["total_queries"],
+        preference_vector=stats["preference_vector"]
     )
 
 
@@ -218,11 +293,12 @@ async def stats():
     Returns the current Evolution Level and system statistics.
     Used by the Dashboard sidebar's "Evolution Stats" panel.
     """
+    stats = get_evolution_stats()
     return StatsResponse(
-        total_queries=evolution_state["total_queries"],
-        total_votes=evolution_state["total_votes"],
-        evolution_level=evolution_state["evolution_level"],
-        preference_vector=evolution_state["preference_vector"],
+        total_queries=stats["total_queries"],
+        total_votes=stats["total_votes"],
+        evolution_level=stats["evolution_level"],
+        preference_vector=stats["preference_vector"],
         agents=[
             {"name": "Searcher", "status": "ready", "type": "Web Search"},
             {"name": "Scraper", "status": "ready", "type": "Content Extraction"},
@@ -238,9 +314,10 @@ async def stats():
 
 @app.get("/")
 async def root():
+    stats = get_evolution_stats()
     return {
         "name": "InsightStream API",
         "version": "0.1.0",
         "status": "online",
-        "evolution_level": evolution_state["evolution_level"],
+        "evolution_level": stats["evolution_level"],
     }

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "uuid-6",
+    "title": "Understanding AI Technology",
+    "url": "https://www.ai.mil/",
+    "source": "DoD Joint AI Center",
+    "sourceType": "Report",
+    "summary": [
+      "Machine learning allows systems to learn from data instead of explicit programming.",
+      "AI systems rely heavily on high-quality data, computing power, and proper integration into workflows.",
+      "Different learning types (supervised, unsupervised, reinforcement) determine system behavior and performance."
+    ],
+    "credibility": 0.94,
+    "votes": 0
+  },
+  {
+    "id": "uuid-7",
+    "title": "Ethics & AI in Healthcare: A Systematic Review",
+    "url": "https://doi.org/10.3390/ai4010003",
+    "source": "MDPI AI Journal",
+    "sourceType": "Journal",
+    "summary": [
+      "Identifies 12 major ethical concerns including fairness, privacy, transparency, and accountability.",
+      "Highlights risks of black-box AI models that lack explainability in critical healthcare decisions.",
+      "Proposes strategies like explainable AI and regulatory frameworks to ensure safe adoption."
+    ],
+    "credibility": 0.93,
+    "votes": 0
+  },
+  {
+    "id": "uuid-8",
+    "title": "AI vs Accountants: Will Artificial Intelligence Replace Human Number Crunchers?",
+    "url": "https://iamwcaset.org",
+    "source": "IAMWCASET Conference",
+    "sourceType": "Conference",
+    "summary": [
+      "AI improves efficiency in accounting tasks but does not replace human decision-making roles.",
+      "Human skills like ethics, strategy, and client interaction remain irreplaceable.",
+      "Future lies in human-AI collaboration rather than full automation."
+    ],
+    "credibility": 0.85,
+    "votes": 0
+  },
+  {
+    "id": "uuid-9",
+    "title": "Envisioning AI for K-12 Education",
+    "url": "https://aaai.org/",
+    "source": "AAAI Conference",
+    "sourceType": "Conference",
+    "summary": [
+      "AI education is essential for future digital literacy and informed citizens.",
+      "Students should understand core AI concepts like machine learning, robotics, and societal impact.",
+      "Hands-on tools and accessible platforms are key to teaching AI effectively at early stages."
+    ],
+    "credibility": 0.9,
+    "votes": 0
+  },
+  {
+    "id": "uuid-10",
+    "title": "Artificial Intelligence in Chemistry: Current Trends and Future Directions",
+    "url": "https://doi.org/10.1021/acs.jcim.1c00619",
+    "source": "Journal of Chemical Information and Modeling",
+    "sourceType": "Journal",
+    "summary": [
+      "AI accelerates drug discovery, material design, and chemical analysis.",
+      "Research in AI-driven chemistry has grown rapidly due to data availability and computing power.",
+      "Future applications include automated labs and predictive modeling for complex chemical systems."
+    ],
+    "credibility": 0.96,
+    "votes": 0
+  }
+]

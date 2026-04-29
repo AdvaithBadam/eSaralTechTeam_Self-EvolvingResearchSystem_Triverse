@@ -1,9 +1,24 @@
+from duckduckgo_search import DDGS
 import asyncio
 
 async def search_web(query: str) -> list[dict]:
-    await asyncio.sleep(0.1)
-    return []
+    def fetch():
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=5))
 
-# bridge for current app.py (DO NOT REMOVE)
+    search_results = await asyncio.to_thread(fetch)
+
+    results = []
+    for r in search_results:
+        results.append({
+            "title": r.get("title", ""),
+            "url": r.get("href", ""),
+            "source_type": "Web"
+        })
+
+    return results
+
+
+# TEMP bridge for your current app.py
 async def run_agents(query: str):
     return await search_web(query)
